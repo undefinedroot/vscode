@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IWorkbenchContribution } from 'vs/workbench/common/contributions';
-import { IUserDataSyncService, SyncStatus, SyncSource, CONTEXT_SYNC_STATE, IUserDataSyncStore, registerConfiguration, getUserDataSyncStore, ISyncConfiguration, IUserDataAuthTokenService, IUserDataAutoSyncService, USER_DATA_SYNC_SCHEME, toRemoteContentResource, getSyncSourceFromRemoteContentResource, UserDataSyncErrorCode } from 'vs/platform/userDataSync/common/userDataSync';
+import { IUserDataSyncService, SyncStatus, SyncSource, CONTEXT_SYNC_STATE, IUserDataSyncStore, registerConfiguration, getUserDataSyncStore, ISyncConfiguration, IUserDataAuthTokenService, IUserDataAutoSyncService, USER_DATA_SYNC_SCHEME, toRemoteContentResource, getSyncSourceFromRemoteContentResource, UserDataSyncErrorCode, ISettingsSyncService } from 'vs/platform/userDataSync/common/userDataSync';
 import { localize } from 'vs/nls';
 import { Disposable, MutableDisposable, toDisposable, DisposableStore, dispose } from 'vs/base/common/lifecycle';
 import { CommandsRegistry } from 'vs/platform/commands/common/commands';
@@ -44,6 +44,7 @@ import type { IEditorInput } from 'vs/workbench/common/editor';
 import { Action } from 'vs/base/common/actions';
 import { IPreferencesService } from 'vs/workbench/services/preferences/common/preferences';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
+import { IFileService } from 'vs/platform/files/common/files';
 
 const enum AuthStatus {
 	Initializing = 'Initializing',
@@ -85,6 +86,7 @@ export class UserDataSyncWorkbenchContribution extends Disposable implements IWo
 
 	constructor(
 		@IUserDataSyncService private readonly userDataSyncService: IUserDataSyncService,
+		@ISettingsSyncService private readonly settingsSyncService: ISettingsSyncService,
 		@IAuthenticationService private readonly authenticationService: IAuthenticationService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@IActivityService private readonly activityService: IActivityService,
@@ -101,6 +103,7 @@ export class UserDataSyncWorkbenchContribution extends Disposable implements IWo
 		@ITextModelService textModelResolverService: ITextModelService,
 		@IPreferencesService private readonly preferencesService: IPreferencesService,
 		@ITelemetryService private readonly telemetryService: ITelemetryService,
+		@IFileService private readonly fileService: IFileService,
 	) {
 		super();
 		this.userDataSyncStore = getUserDataSyncStore(configurationService);
@@ -232,6 +235,14 @@ export class UserDataSyncWorkbenchContribution extends Disposable implements IWo
 				const conflictsArea = getSyncAreaLabel(this.userDataSyncService.conflictsSource!);
 				const handle = this.notificationService.prompt(Severity.Warning, localize('conflicts detected', "Unable to sync due to conflicts in {0}. Please resolve them to continue.", conflictsArea),
 					[
+						{
+							label: localize('accept remote settings', "Accept Remote Settings"),
+							run: () => this.acceptSettingConflicts('remote')
+						},
+						{
+							label: localize('accept local settings', "Accept Local Settings"),
+							run: () => this.acceptSettingConflicts('local')
+						},
 						{
 							label: localize('show conflicts', "Show Conflicts"),
 							run: () => {
@@ -514,6 +525,20 @@ export class UserDataSyncWorkbenchContribution extends Disposable implements IWo
 			const resource = input instanceof DiffEditorInput ? input.master.getResource() : input.getResource();
 			return isEqual(resource, this.workbenchEnvironmentService.settingsSyncPreviewResource) || isEqual(resource, this.workbenchEnvironmentService.keybindingsSyncPreviewResource);
 		});
+	}
+
+	private async acceptSettingConflicts(resolutionSource: 'local' | 'remote'): Promise<void> {
+		let contents: string | undefined;
+		if (resolutionSource === 'local') {
+			const fileContent = await this.fileService.readFile(this.workbenchEnvironmentService.settingsResource);
+			contents = fileContent.value.toString();
+		} else {
+			contents = await this.settingsSyncService.getRemoteContent() || undefined;
+		}
+
+		if (contents) {
+			this.userDataSyncService.accept(SyncSource.Settings, contents);
+		}
 	}
 
 	private async handleConflicts(): Promise<void> {
