@@ -119,7 +119,11 @@
 			"project": "vscode-workbench"
 		},
 		{
-			"name": "vs/workbench/contrib/quickopen",
+			"name": "vs/workbench/contrib/notebook",
+			"project": "vscode-workbench"
+		},
+		{
+			"name": "vs/workbench/contrib/quickaccess",
 			"project": "vscode-workbench"
 		},
 		{
@@ -132,6 +136,10 @@
 		},
 		{
 			"name": "vs/workbench/contrib/relauncher",
+			"project": "vscode-workbench"
+		},
+		{
+			"name": "vs/workbench/contrib/sash",
 			"project": "vscode-workbench"
 		},
 		{
@@ -211,6 +219,10 @@
 			"project": "vscode-workbench"
 		},
 		{
+			"name": "vs/workbench/contrib/views",
+			"project": "vscode-workbench"
+		},
+		{
 			"name": "vs/workbench/services/actions",
 			"project": "vscode-workbench"
 		},
@@ -235,10 +247,6 @@
 			"project": "vscode-workbench"
 		},
 		{
-			"name": "vs/workbench/services/crashReporter",
-			"project": "vscode-workbench"
-		},
-		{
 			"name": "vs/workbench/services/dialogs",
 			"project": "vscode-workbench"
 		},
@@ -256,6 +264,10 @@
 		},
 		{
 			"name": "vs/workbench/services/files",
+			"project": "vscode-workbench"
+		},
+		{
+			"name": "vs/workbench/services/log",
 			"project": "vscode-workbench"
 		},
 		{
@@ -299,6 +311,10 @@
 			"project": "vscode-workbench"
 		},
 		{
+			"name": "vs/workbench/services/workingCopy",
+			"project": "vscode-workbench"
+		},
+		{
 			"name": "vs/workbench/services/workspaces",
 			"project": "vscode-workbench"
 		},
@@ -327,7 +343,15 @@
 			"project": "vscode-workbench"
 		},
 		{
+			"name": "vs/workbench/services/views",
+			"project": "vscode-workbench"
+		},
+		{
 			"name": "vs/workbench/contrib/timeline",
+			"project": "vscode-workbench"
+		},
+		{
+			"name": "vs/workbench/services/authentication",
 			"project": "vscode-workbench"
 		}
 	]

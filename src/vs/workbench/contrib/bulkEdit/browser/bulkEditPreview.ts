@@ -18,8 +18,9 @@ import { IFileService } from 'vs/platform/files/common/files';
 import { Emitter, Event } from 'vs/base/common/event';
 import { IIdentifiedSingleEditOperation } from 'vs/editor/common/model';
 import { ConflictDetector } from 'vs/workbench/services/bulkEdit/browser/conflicts';
-import { values, ResourceMap } from 'vs/base/common/map';
+import { ResourceMap } from 'vs/base/common/map';
 import { localize } from 'vs/nls';
+import { extUri } from 'vs/base/common/resources';
 
 export class CheckedStates<T extends object> {
 
@@ -89,7 +90,7 @@ export class BulkFileOperation {
 		readonly parent: BulkFileOperations
 	) { }
 
-	addEdit(index: number, type: BulkFileOperationType, edit: WorkspaceTextEdit | WorkspaceFileEdit, ) {
+	addEdit(index: number, type: BulkFileOperationType, edit: WorkspaceTextEdit | WorkspaceFileEdit) {
 		this.type |= type;
 		this.originalEdits.set(index, edit);
 		if (WorkspaceTextEdit.is(edit)) {
@@ -98,6 +99,15 @@ export class BulkFileOperation {
 		} else if (type === BulkFileOperationType.Rename) {
 			this.newUri = edit.newUri;
 		}
+	}
+
+	needsConfirmation(): boolean {
+		for (let [, edit] of this.originalEdits) {
+			if (!this.parent.checked.isChecked(edit)) {
+				return true;
+			}
+		}
+		return false;
 	}
 }
 
@@ -117,8 +127,8 @@ export class BulkCategory {
 
 	constructor(readonly metadata: WorkspaceEditMetadata = BulkCategory._defaultMetadata) { }
 
-	get fileOperations(): BulkFileOperation[] {
-		return values(this.operationByResource);
+	get fileOperations(): IterableIterator<BulkFileOperation> {
+		return this.operationByResource.values();
 	}
 }
 
@@ -200,13 +210,13 @@ export class BulkFileOperations {
 			}
 
 			const insert = (uri: URI, map: Map<string, BulkFileOperation>) => {
-				let key = uri.toString();
+				let key = extUri.getComparisonKey(uri, true);
 				let operation = map.get(key);
 
 				// rename
 				if (!operation && newToOldUri.has(uri)) {
 					uri = newToOldUri.get(uri)!;
-					key = uri.toString();
+					key = extUri.getComparisonKey(uri, true);
 					operation = map.get(key);
 				}
 
@@ -230,7 +240,7 @@ export class BulkFileOperations {
 		}
 
 		operationByResource.forEach(value => this.fileOperations.push(value));
-		operationByCategory.forEach(value => value.metadata.needsConfirmation ? this.categories.unshift(value) : this.categories.push(value));
+		operationByCategory.forEach(value => this.categories.push(value));
 
 		// "correct" invalid parent-check child states that is
 		// unchecked file edits (rename, create, delete) uncheck
@@ -238,18 +248,29 @@ export class BulkFileOperations {
 		for (let file of this.fileOperations) {
 			if (file.type !== BulkFileOperationType.TextEdit) {
 				let checked = true;
-				file.originalEdits.forEach(edit => {
+				for (const edit of file.originalEdits.values()) {
 					if (WorkspaceFileEdit.is(edit)) {
 						checked = checked && this.checked.isChecked(edit);
 					}
-				});
+				}
 				if (!checked) {
-					file.originalEdits.forEach(edit => {
+					for (const edit of file.originalEdits.values()) {
 						this.checked.updateChecked(edit, checked);
-					});
+					}
 				}
 			}
 		}
+
+		// sort (once) categories atop which have unconfirmed edits
+		this.categories.sort((a, b) => {
+			if (a.metadata.needsConfirmation === b.metadata.needsConfirmation) {
+				return a.metadata.label.localeCompare(b.metadata.label);
+			} else if (a.metadata.needsConfirmation) {
+				return -1;
+			} else {
+				return 1;
+			}
+		});
 
 		return this;
 	}
@@ -284,8 +305,7 @@ export class BulkFileOperations {
 				const result: IIdentifiedSingleEditOperation[] = [];
 				let ignoreAll = false;
 
-				file.originalEdits.forEach(edit => {
-
+				for (const edit of file.originalEdits.values()) {
 					if (WorkspaceTextEdit.is(edit)) {
 						if (this.checked.isChecked(edit)) {
 							result.push(EditOperation.replaceMove(Range.lift(edit.edit.range), edit.edit.text));
@@ -295,7 +315,7 @@ export class BulkFileOperations {
 						// UNCHECKED WorkspaceFileEdit disables all text edits
 						ignoreAll = true;
 					}
-				});
+				}
 
 				if (ignoreAll) {
 					return [];
@@ -311,16 +331,11 @@ export class BulkFileOperations {
 	}
 
 	getUriOfEdit(edit: WorkspaceFileEdit | WorkspaceTextEdit): URI {
-
 		for (let file of this.fileOperations) {
-			let found = false;
-			file.originalEdits.forEach(value => {
-				if (!found && value === edit) {
-					found = true;
+			for (const value of file.originalEdits.values()) {
+				if (value === edit) {
+					return file.uri;
 				}
-			});
-			if (found) {
-				return file.uri;
 			}
 		}
 		throw new Error('invalid edit');
@@ -379,7 +394,7 @@ export class BulkEditPreviewProvider implements ITextModelContentProvider {
 		}
 		// apply new edits and keep (future) undo edits
 		const newEdits = this._operations.getFileEdits(uri);
-		const newUndoEdits = model.applyEdits(newEdits);
+		const newUndoEdits = model.applyEdits(newEdits, true);
 		this._modelPreviewEdits.set(model.id, newUndoEdits);
 	}
 

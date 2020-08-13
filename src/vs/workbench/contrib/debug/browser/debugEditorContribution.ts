@@ -7,13 +7,13 @@ import * as nls from 'vs/nls';
 import { RunOnceScheduler } from 'vs/base/common/async';
 import * as env from 'vs/base/common/platform';
 import { visit } from 'vs/base/common/json';
+import { setProperty } from 'vs/base/common/jsonEdit';
 import { Constants } from 'vs/base/common/uint';
 import { KeyCode } from 'vs/base/common/keyCodes';
 import { IKeyboardEvent } from 'vs/base/browser/keyboardEvent';
 import { StandardTokenType } from 'vs/editor/common/modes';
 import { DEFAULT_WORD_REGEXP } from 'vs/editor/common/model/wordHelper';
 import { ICodeEditor, IEditorMouseEvent, MouseTargetType, IPartialEditorMouseEvent } from 'vs/editor/browser/editorBrowser';
-import { registerEditorContribution } from 'vs/editor/browser/editorExtensions';
 import { IDecorationOptions } from 'vs/editor/common/editorCommon';
 import { ICodeEditorService } from 'vs/editor/browser/services/codeEditorService';
 import { Range } from 'vs/editor/common/core/range';
@@ -21,7 +21,7 @@ import { IInstantiationService } from 'vs/platform/instantiation/common/instanti
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { ICommandService } from 'vs/platform/commands/common/commands';
-import { IDebugEditorContribution, IDebugService, State, EDITOR_CONTRIBUTION_ID, IStackFrame, IDebugConfiguration, IExpression, IExceptionInfo, IDebugSession } from 'vs/workbench/contrib/debug/common/debug';
+import { IDebugEditorContribution, IDebugService, State, IStackFrame, IDebugConfiguration, IExpression, IExceptionInfo, IDebugSession } from 'vs/workbench/contrib/debug/common/debug';
 import { ExceptionWidget } from 'vs/workbench/contrib/debug/browser/exceptionWidget';
 import { FloatingClickWidget } from 'vs/workbench/browser/parts/editor/editorWidgets';
 import { Position } from 'vs/editor/common/core/position';
@@ -29,11 +29,11 @@ import { CoreEditingCommands } from 'vs/editor/browser/controller/coreCommands';
 import { first } from 'vs/base/common/arrays';
 import { memoize, createMemoizer } from 'vs/base/common/decorators';
 import { IEditorHoverOptions, EditorOption } from 'vs/editor/common/config/editorOptions';
-import { CancellationToken } from 'vs/base/common/cancellation';
 import { DebugHoverWidget } from 'vs/workbench/contrib/debug/browser/debugHover';
 import { ITextModel } from 'vs/editor/common/model';
-import { getHover } from 'vs/editor/contrib/hover/getHover';
 import { dispose, IDisposable } from 'vs/base/common/lifecycle';
+import { EditOperation } from 'vs/editor/common/core/editOperation';
+import { basename } from 'vs/base/common/path';
 
 const HOVER_DELAY = 300;
 const LAUNCH_JSON_REGEX = /\.vscode\/launch\.json$/;
@@ -136,17 +136,19 @@ function getWordToLineNumbersMap(model: ITextModel | null): Map<string, number[]
 		model.forceTokenization(lineNumber);
 		const lineTokens = model.getLineTokens(lineNumber);
 		for (let tokenIndex = 0, tokenCount = lineTokens.getCount(); tokenIndex < tokenCount; tokenIndex++) {
-			const tokenStartOffset = lineTokens.getStartOffset(tokenIndex);
-			const tokenEndOffset = lineTokens.getEndOffset(tokenIndex);
 			const tokenType = lineTokens.getStandardTokenType(tokenIndex);
-			const tokenStr = lineContent.substring(tokenStartOffset, tokenEndOffset);
 
 			// Token is a word and not a comment
 			if (tokenType === StandardTokenType.Other) {
 				DEFAULT_WORD_REGEXP.lastIndex = 0; // We assume tokens will usually map 1:1 to words if they match
+
+				const tokenStartOffset = lineTokens.getStartOffset(tokenIndex);
+				const tokenEndOffset = lineTokens.getEndOffset(tokenIndex);
+				const tokenStr = lineContent.substring(tokenStartOffset, tokenEndOffset);
 				const wordMatch = DEFAULT_WORD_REGEXP.exec(tokenStr);
 
 				if (wordMatch) {
+
 					const word = wordMatch[0];
 					if (!result.has(word)) {
 						result.set(word, []);
@@ -161,11 +163,10 @@ function getWordToLineNumbersMap(model: ITextModel | null): Map<string, number[]
 	return result;
 }
 
-class DebugEditorContribution implements IDebugEditorContribution {
+export class DebugEditorContribution implements IDebugEditorContribution {
 
 	private toDispose: IDisposable[];
 	private hoverWidget: DebugHoverWidget;
-	private nonDebugHoverPosition: Position | undefined;
 	private hoverRange: Range | null = null;
 	private mouseDown = false;
 	private static readonly MEMOIZER = createMemoizer();
@@ -199,7 +200,6 @@ class DebugEditorContribution implements IDebugEditorContribution {
 		this.toDispose.push(this.editor.onMouseUp(() => this.mouseDown = false));
 		this.toDispose.push(this.editor.onMouseMove((e: IEditorMouseEvent) => this.onEditorMouseMove(e)));
 		this.toDispose.push(this.editor.onMouseLeave((e: IPartialEditorMouseEvent) => {
-			this.provideNonDebugHoverScheduler.cancel();
 			const hoverDomNode = this.hoverWidget.getDomNode();
 			if (!hoverDomNode) {
 				return;
@@ -310,24 +310,11 @@ class DebugEditorContribution implements IDebugEditorContribution {
 		return scheduler;
 	}
 
-	@memoize
-	private get provideNonDebugHoverScheduler(): RunOnceScheduler {
-		const scheduler = new RunOnceScheduler(() => {
-			if (this.editor.hasModel() && this.nonDebugHoverPosition) {
-				getHover(this.editor.getModel(), this.nonDebugHoverPosition, CancellationToken.None);
-			}
-		}, HOVER_DELAY);
-		this.toDispose.push(scheduler);
-
-		return scheduler;
-	}
-
 	private hideHoverWidget(): void {
 		if (!this.hideHoverScheduler.isScheduled() && this.hoverWidget.isVisible()) {
 			this.hideHoverScheduler.schedule();
 		}
 		this.showHoverScheduler.cancel();
-		this.provideNonDebugHoverScheduler.cancel();
 	}
 
 	// hover business
@@ -346,10 +333,6 @@ class DebugEditorContribution implements IDebugEditorContribution {
 			return;
 		}
 
-		if (this.configurationService.getValue<IDebugConfiguration>('debug').enableAllHovers && mouseEvent.target.position) {
-			this.nonDebugHoverPosition = mouseEvent.target.position;
-			this.provideNonDebugHoverScheduler.schedule();
-		}
 		const targetType = mouseEvent.target.type;
 		const stopKey = env.isMacintosh ? 'metaKey' : 'ctrlKey';
 
@@ -442,34 +425,53 @@ class DebugEditorContribution implements IDebugEditorContribution {
 			"debug/addLaunchConfiguration" : {}
 		*/
 		this.telemetryService.publicLog('debug/addLaunchConfiguration');
-		let configurationsArrayPosition: Position | undefined;
 		const model = this.editor.getModel();
 		if (!model) {
 			return;
 		}
 
-		let depthInArray = 0;
+		let configurationsArrayPosition: Position | undefined;
 		let lastProperty: string;
 
-		visit(model.getValue(), {
-			onObjectProperty: (property, offset, length) => {
-				lastProperty = property;
-			},
-			onArrayBegin: (offset: number, length: number) => {
-				if (lastProperty === 'configurations' && depthInArray === 0) {
-					configurationsArrayPosition = model.getPositionAt(offset + 1);
+		const getConfigurationPosition = () => {
+			let depthInArray = 0;
+			visit(model.getValue(), {
+				onObjectProperty: (property: string) => {
+					lastProperty = property;
+				},
+				onArrayBegin: (offset: number) => {
+					if (lastProperty === 'configurations' && depthInArray === 0) {
+						configurationsArrayPosition = model.getPositionAt(offset + 1);
+					}
+					depthInArray++;
+				},
+				onArrayEnd: () => {
+					depthInArray--;
 				}
-				depthInArray++;
-			},
-			onArrayEnd: () => {
-				depthInArray--;
-			}
-		});
+			});
+		};
 
-		this.editor.focus();
+		getConfigurationPosition();
+
+		if (!configurationsArrayPosition) {
+			// "configurations" array doesn't exist. Add it here.
+			const { tabSize, insertSpaces } = model.getOptions();
+			const eol = model.getEOL();
+			const edit = (basename(model.uri.fsPath) === 'launch.json') ?
+				setProperty(model.getValue(), ['configurations'], [], { tabSize, insertSpaces, eol })[0] :
+				setProperty(model.getValue(), ['launch'], { 'configurations': [] }, { tabSize, insertSpaces, eol })[0];
+			const startPosition = model.getPositionAt(edit.offset);
+			const lineNumber = startPosition.lineNumber;
+			const range = new Range(lineNumber, startPosition.column, lineNumber, model.getLineMaxColumn(lineNumber));
+			model.pushEditOperations(null, [EditOperation.replace(range, edit.content)], () => null);
+			// Go through the file again since we've edited it
+			getConfigurationPosition();
+		}
 		if (!configurationsArrayPosition) {
 			return;
 		}
+
+		this.editor.focus();
 
 		const insertLine = (position: Position): Promise<any> => {
 			// Check if there are more characters on a line after a "configurations": [, if yes enter a newline
@@ -542,5 +544,3 @@ class DebugEditorContribution implements IDebugEditorContribution {
 		this.toDispose = dispose(this.toDispose);
 	}
 }
-
-registerEditorContribution(EDITOR_CONTRIBUTION_ID, DebugEditorContribution);

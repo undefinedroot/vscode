@@ -9,38 +9,25 @@ import { URI } from 'vs/base/common/uri';
 import { ResourceEditorInput } from 'vs/workbench/common/editor/resourceEditorInput';
 import { ResourceEditorModel } from 'vs/workbench/common/editor/resourceEditorModel';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
-import { workbenchInstantiationService } from 'vs/workbench/test/browser/workbenchTestServices';
+import { workbenchInstantiationService, TestServiceAccessor, TestTextFileEditorModelManager } from 'vs/workbench/test/browser/workbenchTestServices';
 import { toResource } from 'vs/base/test/common/utils';
-import { ITextModelService } from 'vs/editor/common/services/resolverService';
-import { IModelService } from 'vs/editor/common/services/modelService';
-import { IModeService } from 'vs/editor/common/services/modeService';
 import { TextFileEditorModel } from 'vs/workbench/services/textfile/common/textFileEditorModel';
-import { ITextFileService, snapshotToString } from 'vs/workbench/services/textfile/common/textfiles';
-import { IUntitledTextEditorService } from 'vs/workbench/services/untitled/common/untitledTextEditorService';
+import { snapshotToString } from 'vs/workbench/services/textfile/common/textfiles';
 import { TextFileEditorModelManager } from 'vs/workbench/services/textfile/common/textFileEditorModelManager';
 import { Event } from 'vs/base/common/event';
 import { timeout } from 'vs/base/common/async';
-
-class ServiceAccessor {
-	constructor(
-		@ITextModelService public textModelResolverService: ITextModelService,
-		@IModelService public modelService: IModelService,
-		@IModeService public modeService: IModeService,
-		@ITextFileService public textFileService: ITextFileService,
-		@IUntitledTextEditorService public untitledTextEditorService: IUntitledTextEditorService
-	) {
-	}
-}
+import { UntitledTextEditorInput } from 'vs/workbench/services/untitled/common/untitledTextEditorInput';
+import { createTextBufferFactory } from 'vs/editor/common/model/textModel';
 
 suite('Workbench - TextModelResolverService', () => {
 
 	let instantiationService: IInstantiationService;
-	let accessor: ServiceAccessor;
+	let accessor: TestServiceAccessor;
 	let model: TextFileEditorModel;
 
 	setup(() => {
 		instantiationService = workbenchInstantiationService();
-		accessor = instantiationService.createInstance(ServiceAccessor);
+		accessor = instantiationService.createInstance(TestServiceAccessor);
 	});
 
 	teardown(() => {
@@ -65,7 +52,7 @@ suite('Workbench - TextModelResolverService', () => {
 		});
 
 		let resource = URI.from({ scheme: 'test', authority: null!, path: 'thePath' });
-		let input: ResourceEditorInput = instantiationService.createInstance(ResourceEditorInput, 'The Name', 'The Description', resource, undefined);
+		let input: ResourceEditorInput = instantiationService.createInstance(ResourceEditorInput, resource, 'The Name', 'The Description', undefined);
 
 		const model = await input.resolve();
 		assert.ok(model);
@@ -86,7 +73,7 @@ suite('Workbench - TextModelResolverService', () => {
 
 	test('resolve file', async function () {
 		const textModel = instantiationService.createInstance(TextFileEditorModel, toResource.call(this, '/path/file_resolver.txt'), 'utf8', undefined);
-		(<TextFileEditorModelManager>accessor.textFileService.files).add(textModel.resource, textModel);
+		(<TestTextFileEditorModelManager>accessor.textFileService.files).add(textModel.resource, textModel);
 
 		await textModel.load();
 
@@ -108,13 +95,72 @@ suite('Workbench - TextModelResolverService', () => {
 		assert.equal(disposed, true);
 	});
 
+	test('resolved dirty file eventually disposes', async function () {
+		const textModel = instantiationService.createInstance(TextFileEditorModel, toResource.call(this, '/path/file_resolver.txt'), 'utf8', undefined);
+		(<TestTextFileEditorModelManager>accessor.textFileService.files).add(textModel.resource, textModel);
+
+		const loadedModel = await textModel.load();
+
+		loadedModel.updateTextEditorModel(createTextBufferFactory('make dirty'));
+
+		const ref = await accessor.textModelResolverService.createModelReference(textModel.resource);
+
+		let disposed = false;
+		Event.once(loadedModel.onDispose)(() => {
+			disposed = true;
+		});
+
+		ref.dispose();
+		await timeout(0);
+		assert.equal(disposed, false); // not disposed because model still dirty
+
+		loadedModel.revert();
+
+		await timeout(0);
+		assert.equal(disposed, true); // now disposed because model got reverted
+	});
+
+	test('resolved dirty file does not dispose when new reference created', async function () {
+		const textModel = instantiationService.createInstance(TextFileEditorModel, toResource.call(this, '/path/file_resolver.txt'), 'utf8', undefined);
+		(<TestTextFileEditorModelManager>accessor.textFileService.files).add(textModel.resource, textModel);
+
+		const loadedModel = await textModel.load();
+
+		loadedModel.updateTextEditorModel(createTextBufferFactory('make dirty'));
+
+		const ref1 = await accessor.textModelResolverService.createModelReference(textModel.resource);
+
+		let disposed = false;
+		Event.once(loadedModel.onDispose)(() => {
+			disposed = true;
+		});
+
+		ref1.dispose();
+		await timeout(0);
+		assert.equal(disposed, false); // not disposed because model still dirty
+
+		const ref2 = await accessor.textModelResolverService.createModelReference(textModel.resource);
+
+		loadedModel.revert();
+
+		await timeout(0);
+		assert.equal(disposed, false); // not disposed because we got another ref meanwhile
+
+		ref2.dispose();
+
+		await timeout(0);
+		assert.equal(disposed, true); // now disposed because last ref got disposed
+	});
+
 	test('resolve untitled', async () => {
 		const service = accessor.untitledTextEditorService;
-		const input = service.create();
+		const untitledModel = service.create();
+		const input = instantiationService.createInstance(UntitledTextEditorInput, untitledModel);
 
 		await input.resolve();
-		const ref = await accessor.textModelResolverService.createModelReference(input.getResource());
+		const ref = await accessor.textModelResolverService.createModelReference(input.resource);
 		const model = ref.object;
+		assert.equal(untitledModel, model);
 		const editorModel = model.textEditorModel;
 		assert.ok(editorModel);
 		ref.dispose();

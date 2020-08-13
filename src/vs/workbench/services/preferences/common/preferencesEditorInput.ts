@@ -19,6 +19,7 @@ import { IEditorGroupsService } from 'vs/workbench/services/editor/common/editor
 import { IFileService } from 'vs/platform/files/common/files';
 import { ILabelService } from 'vs/platform/label/common/label';
 import { IFilesConfigurationService } from 'vs/workbench/services/filesConfiguration/common/filesConfigurationService';
+import { Schemas } from 'vs/base/common/network';
 
 export class PreferencesEditorInput extends SideBySideEditorInput {
 	static readonly ID: string = 'workbench.editorinputs.preferencesEditorInput';
@@ -28,7 +29,7 @@ export class PreferencesEditorInput extends SideBySideEditorInput {
 	}
 
 	getTitle(verbosity: Verbosity): string {
-		return this.master.getTitle(verbosity);
+		return this.primary.getTitle(verbosity);
 	}
 }
 
@@ -44,7 +45,7 @@ export class DefaultPreferencesEditorInput extends ResourceEditorInput {
 		@ILabelService labelService: ILabelService,
 		@IFilesConfigurationService filesConfigurationService: IFilesConfigurationService
 	) {
-		super(nls.localize('settingsEditorName', "Default Settings"), '', defaultSettingsResource, undefined, textModelResolverService, textFileService, editorService, editorGroupService, fileService, labelService, filesConfigurationService);
+		super(defaultSettingsResource, nls.localize('settingsEditorName', "Default Settings"), '', undefined, textModelResolverService, textFileService, editorService, editorGroupService, fileService, labelService, filesConfigurationService);
 	}
 
 	getTypeId(): string {
@@ -75,8 +76,11 @@ export class KeybindingsEditorInput extends EditorInput {
 
 	searchOptions: IKeybindingsEditorSearchOptions | null = null;
 
+	readonly resource = undefined;
+
 	constructor(@IInstantiationService instantiationService: IInstantiationService) {
 		super();
+
 		this.keybindingsModel = instantiationService.createInstance(KeybindingsEditorModel, OS);
 	}
 
@@ -88,12 +92,18 @@ export class KeybindingsEditorInput extends EditorInput {
 		return nls.localize('keybindingsInputName', "Keyboard Shortcuts");
 	}
 
-	resolve(): Promise<KeybindingsEditorModel> {
-		return Promise.resolve(this.keybindingsModel);
+	async resolve(): Promise<KeybindingsEditorModel> {
+		return this.keybindingsModel;
 	}
 
 	matches(otherInput: unknown): boolean {
 		return otherInput instanceof KeybindingsEditorInput;
+	}
+
+	dispose(): void {
+		this.keybindingsModel.dispose();
+
+		super.dispose();
 	}
 }
 
@@ -101,8 +111,9 @@ export class SettingsEditor2Input extends EditorInput {
 
 	static readonly ID: string = 'workbench.input.settings2';
 	private readonly _settingsModel: Settings2EditorModel;
-	private resource: URI = URI.from({
-		scheme: 'vscode-settings',
+
+	readonly resource: URI = URI.from({
+		scheme: Schemas.vscodeSettings,
 		path: `settingseditor`
 	});
 
@@ -126,11 +137,13 @@ export class SettingsEditor2Input extends EditorInput {
 		return nls.localize('settingsEditor2InputName', "Settings");
 	}
 
-	resolve(): Promise<Settings2EditorModel> {
-		return Promise.resolve(this._settingsModel);
+	async resolve(): Promise<Settings2EditorModel> {
+		return this._settingsModel;
 	}
 
-	getResource(): URI {
-		return this.resource;
+	dispose(): void {
+		this._settingsModel.dispose();
+
+		super.dispose();
 	}
 }

@@ -8,7 +8,7 @@ import { TestInstantiationService } from 'vs/platform/instantiation/test/common/
 import { setUnexpectedErrorHandler, errorHandler } from 'vs/base/common/errors';
 import { URI } from 'vs/base/common/uri';
 import * as types from 'vs/workbench/api/common/extHostTypes';
-import { TextModel as EditorModel } from 'vs/editor/common/model/textModel';
+import { createTextModel } from 'vs/editor/test/common/editorTestUtils';
 import { Position as EditorPosition, Position } from 'vs/editor/common/core/position';
 import { Range as EditorRange } from 'vs/editor/common/core/range';
 import { TestRPCProtocol } from './testRPCProtocol';
@@ -20,7 +20,7 @@ import { ExtHostCommands } from 'vs/workbench/api/common/extHostCommands';
 import { MainThreadCommands } from 'vs/workbench/api/browser/mainThreadCommands';
 import { ExtHostDocuments } from 'vs/workbench/api/common/extHostDocuments';
 import { ExtHostDocumentsAndEditors } from 'vs/workbench/api/common/extHostDocumentsAndEditors';
-import { getDocumentSymbols } from 'vs/editor/contrib/quickOpen/quickOpen';
+import { getDocumentSymbols } from 'vs/editor/contrib/gotoSymbol/documentSymbols';
 import * as modes from 'vs/editor/common/modes';
 import { getCodeLensData } from 'vs/editor/contrib/codelens/codelens';
 import { getDefinitionsAtPosition, getImplementationsAtPosition, getTypeDefinitionsAtPosition, getDeclarationsAtPosition, getReferencesAtPosition } from 'vs/editor/contrib/gotoSymbol/goToSymbol';
@@ -43,14 +43,15 @@ import { getColors } from 'vs/editor/contrib/colorPicker/color';
 import { CancellationToken } from 'vs/base/common/cancellation';
 import { nullExtensionDescription as defaultExtension } from 'vs/workbench/services/extensions/common/extensions';
 import { provideSelectionRanges } from 'vs/editor/contrib/smartSelect/smartSelect';
-import { mock } from 'vs/workbench/test/browser/api/mock';
+import { mock } from 'vs/base/test/common/mock';
 import { IEditorWorkerService } from 'vs/editor/common/services/editorWorkerService';
 import { dispose } from 'vs/base/common/lifecycle';
 import { withNullAsUndefined } from 'vs/base/common/types';
 import { NullApiDeprecationService } from 'vs/workbench/api/common/extHostApiDeprecationService';
+import { Progress } from 'vs/platform/progress/common/progress';
 
 const defaultSelector = { scheme: 'far' };
-const model: ITextModel = EditorModel.createFromString(
+const model: ITextModel = createTextModel(
 	[
 		'This is the first line',
 		'This is the second line',
@@ -590,7 +591,7 @@ suite('ExtHostLanguageFeatures', function () {
 		}));
 
 		await rpcProtocol.sync();
-		const { validActions: actions } = await getCodeActions(model, model.getFullModelRange(), { type: modes.CodeActionTriggerType.Manual }, CancellationToken.None);
+		const { validActions: actions } = await getCodeActions(model, model.getFullModelRange(), { type: modes.CodeActionTriggerType.Manual }, Progress.None, CancellationToken.None);
 		assert.equal(actions.length, 2);
 		const [first, second] = actions;
 		assert.equal(first.title, 'Testing1');
@@ -614,7 +615,7 @@ suite('ExtHostLanguageFeatures', function () {
 		}));
 
 		await rpcProtocol.sync();
-		const { validActions: actions } = await getCodeActions(model, model.getFullModelRange(), { type: modes.CodeActionTriggerType.Manual }, CancellationToken.None);
+		const { validActions: actions } = await getCodeActions(model, model.getFullModelRange(), { type: modes.CodeActionTriggerType.Manual }, Progress.None, CancellationToken.None);
 		assert.equal(actions.length, 1);
 		const [first] = actions;
 		assert.equal(first.title, 'Testing1');
@@ -637,7 +638,7 @@ suite('ExtHostLanguageFeatures', function () {
 		}));
 
 		await rpcProtocol.sync();
-		const { validActions: actions } = await getCodeActions(model, model.getFullModelRange(), { type: modes.CodeActionTriggerType.Manual }, CancellationToken.None);
+		const { validActions: actions } = await getCodeActions(model, model.getFullModelRange(), { type: modes.CodeActionTriggerType.Manual }, Progress.None, CancellationToken.None);
 		assert.equal(actions.length, 1);
 	});
 
@@ -655,7 +656,7 @@ suite('ExtHostLanguageFeatures', function () {
 		}));
 
 		await rpcProtocol.sync();
-		const { validActions: actions } = await getCodeActions(model, model.getFullModelRange(), { type: modes.CodeActionTriggerType.Manual }, CancellationToken.None);
+		const { validActions: actions } = await getCodeActions(model, model.getFullModelRange(), { type: modes.CodeActionTriggerType.Manual }, Progress.None, CancellationToken.None);
 		assert.equal(actions.length, 1);
 	});
 
@@ -761,6 +762,72 @@ suite('ExtHostLanguageFeatures', function () {
 		assert.equal(value.edits.length, 2);
 	});
 
+	test('Multiple RenameProviders don\'t respect all possible PrepareRename handlers, #98352', async function () {
+
+		let called = [false, false, false, false];
+
+		disposables.push(extHost.registerRenameProvider(defaultExtension, defaultSelector, new class implements vscode.RenameProvider {
+			prepareRename(document: vscode.TextDocument, position: vscode.Position,): vscode.ProviderResult<vscode.Range> {
+				called[0] = true;
+				let range = document.getWordRangeAtPosition(position);
+				return range;
+			}
+
+			provideRenameEdits(): vscode.ProviderResult<vscode.WorkspaceEdit> {
+				called[1] = true;
+				return undefined;
+			}
+		}));
+
+		disposables.push(extHost.registerRenameProvider(defaultExtension, defaultSelector, new class implements vscode.RenameProvider {
+			prepareRename(document: vscode.TextDocument, position: vscode.Position,): vscode.ProviderResult<vscode.Range> {
+				called[2] = true;
+				return Promise.reject('Cannot rename this symbol2.');
+			}
+			provideRenameEdits(): vscode.ProviderResult<vscode.WorkspaceEdit> {
+				called[3] = true;
+				return undefined;
+			}
+		}));
+
+		await rpcProtocol.sync();
+		await rename(model, new EditorPosition(1, 1), 'newName');
+
+		assert.deepEqual(called, [true, true, true, false]);
+	});
+
+	test('Multiple RenameProviders don\'t respect all possible PrepareRename handlers, #98352', async function () {
+
+		let called = [false, false, false];
+
+		disposables.push(extHost.registerRenameProvider(defaultExtension, defaultSelector, new class implements vscode.RenameProvider {
+			prepareRename(document: vscode.TextDocument, position: vscode.Position,): vscode.ProviderResult<vscode.Range> {
+				called[0] = true;
+				let range = document.getWordRangeAtPosition(position);
+				return range;
+			}
+
+			provideRenameEdits(): vscode.ProviderResult<vscode.WorkspaceEdit> {
+				called[1] = true;
+				return undefined;
+			}
+		}));
+
+		disposables.push(extHost.registerRenameProvider(defaultExtension, defaultSelector, new class implements vscode.RenameProvider {
+
+			provideRenameEdits(document: vscode.TextDocument, position: vscode.Position, newName: string,): vscode.ProviderResult<vscode.WorkspaceEdit> {
+				called[2] = true;
+				return new types.WorkspaceEdit();
+			}
+		}));
+
+		await rpcProtocol.sync();
+		await rename(model, new EditorPosition(1, 1), 'newName');
+
+		// first provider has NO prepare which means it is taken by default
+		assert.deepEqual(called, [false, false, true]);
+	});
+
 	// --- parameter hints
 
 	test('Parameter Hints, order', async () => {
@@ -816,9 +883,9 @@ suite('ExtHostLanguageFeatures', function () {
 		}, []));
 
 		await rpcProtocol.sync();
-		const value = await provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet)));
-		assert.equal(value.length, 1);
-		assert.equal(value[0].completion.insertText, 'testing2');
+		const { items } = await provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet)));
+		assert.equal(items.length, 1);
+		assert.equal(items[0].completion.insertText, 'testing2');
 	});
 
 	test('Suggest, order 2/3', async () => {
@@ -836,9 +903,9 @@ suite('ExtHostLanguageFeatures', function () {
 		}, []));
 
 		await rpcProtocol.sync();
-		const value = await provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet)));
-		assert.equal(value.length, 1);
-		assert.equal(value[0].completion.insertText, 'weak-selector');
+		const { items } = await provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet)));
+		assert.equal(items.length, 1);
+		assert.equal(items[0].completion.insertText, 'weak-selector');
 	});
 
 	test('Suggest, order 2/3', async () => {
@@ -856,10 +923,10 @@ suite('ExtHostLanguageFeatures', function () {
 		}, []));
 
 		await rpcProtocol.sync();
-		const value = await provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet)));
-		assert.equal(value.length, 2);
-		assert.equal(value[0].completion.insertText, 'strong-1'); // sort by label
-		assert.equal(value[1].completion.insertText, 'strong-2');
+		const { items } = await provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet)));
+		assert.equal(items.length, 2);
+		assert.equal(items[0].completion.insertText, 'strong-1'); // sort by label
+		assert.equal(items[1].completion.insertText, 'strong-2');
 	});
 
 	test('Suggest, evil provider', async () => {
@@ -878,8 +945,8 @@ suite('ExtHostLanguageFeatures', function () {
 
 
 		await rpcProtocol.sync();
-		const value = await provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet)));
-		assert.equal(value[0].container.incomplete, false);
+		const { items } = await provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet)));
+		assert.equal(items[0].container.incomplete, false);
 	});
 
 	test('Suggest, CompletionList', async () => {
@@ -891,8 +958,8 @@ suite('ExtHostLanguageFeatures', function () {
 		}, []));
 
 		await rpcProtocol.sync();
-		provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet))).then(value => {
-			assert.equal(value[0].container.incomplete, true);
+		provideSuggestionItems(model, new EditorPosition(1, 1), new CompletionOptions(undefined, new Set<modes.CompletionItemKind>().add(modes.CompletionItemKind.Snippet))).then(model => {
+			assert.equal(model.items[0].container.incomplete, true);
 		});
 	});
 

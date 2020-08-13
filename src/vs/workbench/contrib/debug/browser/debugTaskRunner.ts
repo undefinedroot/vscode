@@ -69,7 +69,10 @@ export class DebugTaskRunner {
 				return TaskRunResult.Success;
 			}
 			if (onTaskErrors === 'showErrors') {
-				await this.viewsService.openView(Constants.MARKERS_VIEW_ID);
+				await this.viewsService.openView(Constants.MARKERS_VIEW_ID, true);
+				return Promise.resolve(TaskRunResult.Failure);
+			}
+			if (onTaskErrors === 'abort') {
 				return Promise.resolve(TaskRunResult.Failure);
 			}
 
@@ -82,25 +85,28 @@ export class DebugTaskRunner {
 						? nls.localize('preLaunchTaskExitCode', "The preLaunchTask '{0}' terminated with exit code {1}.", taskLabel, taskSummary.exitCode)
 						: nls.localize('preLaunchTaskTerminated', "The preLaunchTask '{0}' terminated.", taskLabel);
 
-			const result = await this.dialogService.show(severity.Warning, message, [nls.localize('debugAnyway', "Debug Anyway"), nls.localize('showErrors', "Show Errors"), nls.localize('cancel', "Cancel")], {
+			const result = await this.dialogService.show(severity.Warning, message, [nls.localize('debugAnyway', "Debug Anyway"), nls.localize('showErrors', "Show Errors"), nls.localize('abort', "Abort")], {
 				checkbox: {
 					label: nls.localize('remember', "Remember my choice in user settings"),
 				},
 				cancelId: 2
 			});
 
-			if (result.choice === 2) {
-				return Promise.resolve(TaskRunResult.Failure);
-			}
+
 			const debugAnyway = result.choice === 0;
+			const abort = result.choice === 2;
 			if (result.checkboxChecked) {
-				this.configurationService.updateValue('debug.onTaskErrors', debugAnyway ? 'debugAnyway' : 'showErrors');
+				this.configurationService.updateValue('debug.onTaskErrors', result.choice === 0 ? 'debugAnyway' : abort ? 'abort' : 'showErrors');
+			}
+
+			if (abort) {
+				return Promise.resolve(TaskRunResult.Failure);
 			}
 			if (debugAnyway) {
 				return TaskRunResult.Success;
 			}
 
-			await this.viewsService.openView(Constants.MARKERS_VIEW_ID);
+			await this.viewsService.openView(Constants.MARKERS_VIEW_ID, true);
 			return Promise.resolve(TaskRunResult.Failure);
 		} catch (err) {
 			await onError(err.message, [this.taskService.configureAction()]);
@@ -140,10 +146,10 @@ export class DebugTaskRunner {
 		}));
 
 		const promise: Promise<ITaskSummary | null> = this.taskService.getActiveTasks().then(async (tasks): Promise<ITaskSummary | null> => {
-			if (tasks.filter(t => t._id === task._id).length) {
+			if (tasks.find(t => t._id === task._id)) {
 				// Check that the task isn't busy and if it is, wait for it
 				const busyTasks = await this.taskService.getBusyTasks();
-				if (busyTasks.filter(t => t._id === task._id).length) {
+				if (busyTasks.find(t => t._id === task._id)) {
 					taskStarted = true;
 					return inactivePromise;
 				}

@@ -11,7 +11,7 @@ import { ModelServiceImpl } from 'vs/editor/common/services/modelServiceImpl';
 import { TestCodeEditorService } from 'vs/editor/test/browser/editorTestServices';
 import { ITextFileService } from 'vs/workbench/services/textfile/common/textfiles';
 import { ExtHostDocumentsAndEditorsShape, ExtHostContext, ExtHostDocumentsShape, IWorkspaceTextEditDto } from 'vs/workbench/api/common/extHost.protocol';
-import { mock } from 'vs/workbench/test/browser/api/mock';
+import { mock } from 'vs/base/test/common/mock';
 import { Event } from 'vs/base/common/event';
 import { MainThreadTextEditors } from 'vs/workbench/api/browser/mainThreadEditors';
 import { URI } from 'vs/base/common/uri';
@@ -19,7 +19,7 @@ import { Range } from 'vs/editor/common/core/range';
 import { Position } from 'vs/editor/common/core/position';
 import { IModelService } from 'vs/editor/common/services/modelService';
 import { EditOperation } from 'vs/editor/common/core/editOperation';
-import { TestFileService, TestEditorService, TestEditorGroupsService, TestEnvironmentService, TestContextService, TestTextResourcePropertiesService } from 'vs/workbench/test/browser/workbenchTestServices';
+import { TestFileService, TestEditorService, TestEditorGroupsService, TestEnvironmentService } from 'vs/workbench/test/browser/workbenchTestServices';
 import { BulkEditService } from 'vs/workbench/services/bulkEdit/browser/bulkEditService';
 import { NullLogService, ILogService } from 'vs/platform/log/common/log';
 import { ITextModelService, IResolvedTextEditorModel } from 'vs/editor/common/services/resolverService';
@@ -40,6 +40,16 @@ import { SyncDescriptor } from 'vs/platform/instantiation/common/descriptors';
 import { IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
 import { IWorkbenchEnvironmentService } from 'vs/workbench/services/environment/common/environmentService';
 import { ILabelService } from 'vs/platform/label/common/label';
+import { IWorkingCopyFileService } from 'vs/workbench/services/workingCopy/common/workingCopyFileService';
+import { UndoRedoService } from 'vs/platform/undoRedo/common/undoRedoService';
+import { TestDialogService } from 'vs/platform/dialogs/test/common/testDialogService';
+import { IDialogService } from 'vs/platform/dialogs/common/dialogs';
+import { IUndoRedoService } from 'vs/platform/undoRedo/common/undoRedo';
+import { TestNotificationService } from 'vs/platform/notification/test/common/testNotificationService';
+import { INotificationService } from 'vs/platform/notification/common/notification';
+import { TestTextResourcePropertiesService, TestContextService } from 'vs/workbench/test/common/workbenchTestServices';
+import { IUriIdentityService } from 'vs/workbench/services/uriIdentity/common/uriIdentity';
+import { extUri } from 'vs/base/common/resources';
 
 suite('MainThreadEditors', () => {
 
@@ -62,7 +72,10 @@ suite('MainThreadEditors', () => {
 
 
 		const configService = new TestConfigurationService();
-		modelService = new ModelServiceImpl(configService, new TestTextResourcePropertiesService(configService), new TestThemeService(), new NullLogService());
+		const dialogService = new TestDialogService();
+		const notificationService = new TestNotificationService();
+		const undoRedoService = new UndoRedoService(dialogService, notificationService);
+		modelService = new ModelServiceImpl(configService, new TestTextResourcePropertiesService(configService), new TestThemeService(), new NullLogService(), undoRedoService);
 
 
 		const services = new ServiceCollection();
@@ -72,6 +85,9 @@ suite('MainThreadEditors', () => {
 		services.set(IWorkspaceContextService, new TestContextService());
 		services.set(IWorkbenchEnvironmentService, TestEnvironmentService);
 		services.set(IConfigurationService, configService);
+		services.set(IDialogService, dialogService);
+		services.set(INotificationService, notificationService);
+		services.set(IUndoRedoService, undoRedoService);
 		services.set(IModelService, modelService);
 		services.set(ICodeEditorService, new TestCodeEditorService());
 		services.set(IFileService, new TestFileService());
@@ -79,27 +95,34 @@ suite('MainThreadEditors', () => {
 		services.set(IEditorGroupsService, new TestEditorGroupsService());
 		services.set(ITextFileService, new class extends mock<ITextFileService>() {
 			isDirty() { return false; }
-			create(uri: URI, contents?: string, options?: any) {
-				createdResources.add(uri);
-				return Promise.resolve(Object.create(null));
-			}
-			delete(resource: URI) {
-				deletedResources.add(resource);
-				return Promise.resolve(undefined);
-			}
-			move(source: URI, target: URI) {
-				movedResources.set(source, target);
-				return Promise.resolve(Object.create(null));
-			}
-			copy(source: URI, target: URI) {
-				copiedResources.set(source, target);
-				return Promise.resolve(Object.create(null));
-			}
 			files = <any>{
 				onDidSave: Event.None,
 				onDidRevert: Event.None,
 				onDidChangeDirty: Event.None
 			};
+		});
+		services.set(IWorkingCopyFileService, new class extends mock<IWorkingCopyFileService>() {
+			onDidRunWorkingCopyFileOperation = Event.None;
+			create(resource: URI) {
+				createdResources.add(resource);
+				return Promise.resolve(Object.create(null));
+			}
+			move(files: { source: URI, target: URI }[]) {
+				const { source, target } = files[0];
+				movedResources.set(source, target);
+				return Promise.resolve(Object.create(null));
+			}
+			copy(files: { source: URI, target: URI }[]) {
+				const { source, target } = files[0];
+				copiedResources.set(source, target);
+				return Promise.resolve(Object.create(null));
+			}
+			delete(resources: URI[]) {
+				for (const resource of resources) {
+					deletedResources.add(resource);
+				}
+				return Promise.resolve(undefined);
+			}
 		});
 		services.set(ITextModelService, new class extends mock<ITextModelService>() {
 			createModelReference(resource: URI): Promise<IReference<IResolvedTextEditorModel>> {
@@ -114,12 +137,15 @@ suite('MainThreadEditors', () => {
 
 		});
 		services.set(IPanelService, new class extends mock<IPanelService>() implements IPanelService {
-			_serviceBrand: undefined;
+			declare readonly _serviceBrand: undefined;
 			onDidPanelOpen = Event.None;
 			onDidPanelClose = Event.None;
 			getActivePanel() {
 				return undefined;
 			}
+		});
+		services.set(IUriIdentityService, new class extends mock<IUriIdentityService>() {
+			get extUri() { return extUri; }
 		});
 
 		const instaService = new InstantiationService(services);

@@ -6,24 +6,23 @@
 import * as nls from 'vs/nls';
 import { URI as uri } from 'vs/base/common/uri';
 import * as resources from 'vs/base/common/resources';
-import * as lifecycle from 'vs/base/common/lifecycle';
 import { Event, Emitter } from 'vs/base/common/event';
 import { generateUuid } from 'vs/base/common/uuid';
 import { RunOnceScheduler } from 'vs/base/common/async';
 import { isString, isUndefinedOrNull } from 'vs/base/common/types';
-import { distinct, lastIndex } from 'vs/base/common/arrays';
+import { distinct, lastIndex, first } from 'vs/base/common/arrays';
 import { Range, IRange } from 'vs/editor/common/core/range';
 import {
 	ITreeElement, IExpression, IExpressionContainer, IDebugSession, IStackFrame, IExceptionBreakpoint, IBreakpoint, IFunctionBreakpoint, IDebugModel,
 	IThread, IRawModelUpdate, IScope, IRawStoppedDetails, IEnablement, IBreakpointData, IExceptionInfo, IBreakpointsChangeEvent, IBreakpointUpdateData, IBaseBreakpoint, State, IDataBreakpoint
 } from 'vs/workbench/contrib/debug/common/debug';
 import { Source, UNKNOWN_SOURCE_LABEL, getUriFromSource } from 'vs/workbench/contrib/debug/common/debugSource';
-import { commonSuffixLength } from 'vs/base/common/strings';
-import { posix } from 'vs/base/common/path';
 import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
 import { ITextFileService } from 'vs/workbench/services/textfile/common/textfiles';
-import { ITextEditor } from 'vs/workbench/common/editor';
+import { ITextEditorPane } from 'vs/workbench/common/editor';
 import { mixin } from 'vs/base/common/objects';
+import { DebugStorage } from 'vs/workbench/contrib/debug/common/debugStorage';
+import { CancellationTokenSource } from 'vs/base/common/cancellation';
 
 export class ExpressionContainer implements IExpressionContainer {
 
@@ -270,6 +269,21 @@ export class Scope extends ExpressionContainer implements IScope {
 	}
 }
 
+export class ErrorScope extends Scope {
+
+	constructor(
+		stackFrame: IStackFrame,
+		index: number,
+		message: string,
+	) {
+		super(stackFrame, index, message, 0, false);
+	}
+
+	toString(): string {
+		return this.name;
+	}
+}
+
 export class StackFrame implements IStackFrame {
 
 	private scopes: Promise<Scope[]> | undefined;
@@ -285,39 +299,29 @@ export class StackFrame implements IStackFrame {
 	) { }
 
 	getId(): string {
-		return `stackframe:${this.thread.getId()}:${this.frameId}:${this.index}`;
+		return `stackframe:${this.thread.getId()}:${this.index}:${this.source.name}`;
 	}
 
 	getScopes(): Promise<IScope[]> {
 		if (!this.scopes) {
 			this.scopes = this.thread.session.scopes(this.frameId, this.thread.threadId).then(response => {
-				return response && response.body && response.body.scopes ?
-					response.body.scopes.map((rs, index) => new Scope(this, index, rs.name, rs.variablesReference, rs.expensive, rs.namedVariables, rs.indexedVariables,
-						rs.line && rs.column && rs.endLine && rs.endColumn ? new Range(rs.line, rs.column, rs.endLine, rs.endColumn) : undefined)) : [];
-			}, err => []);
+				if (!response || !response.body || !response.body.scopes) {
+					return [];
+				}
+
+				const scopeNameIndexes = new Map<string, number>();
+				return response.body.scopes.map(rs => {
+					const previousIndex = scopeNameIndexes.get(rs.name);
+					const index = typeof previousIndex === 'number' ? previousIndex + 1 : 0;
+					scopeNameIndexes.set(rs.name, index);
+					return new Scope(this, index, rs.name, rs.variablesReference, rs.expensive, rs.namedVariables, rs.indexedVariables,
+						rs.line && rs.column && rs.endLine && rs.endColumn ? new Range(rs.line, rs.column, rs.endLine, rs.endColumn) : undefined);
+
+				});
+			}, err => [new ErrorScope(this, 0, err.message)]);
 		}
 
 		return this.scopes;
-	}
-
-	getSpecificSourceName(): string {
-		// To reduce flashing of the path name and the way we fetch stack frames
-		// We need to compute the source name based on the other frames in the stale call stack
-		let callStack = (<Thread>this.thread).getStaleCallStack();
-		callStack = callStack.length > 0 ? callStack : this.thread.getCallStack();
-		const otherSources = callStack.map(sf => sf.source).filter(s => s !== this.source);
-		let suffixLength = 0;
-		otherSources.forEach(s => {
-			if (s.name === this.source.name) {
-				suffixLength = Math.max(suffixLength, commonSuffixLength(this.source.uri.path, s.uri.path));
-			}
-		});
-		if (suffixLength === 0) {
-			return this.source.name;
-		}
-
-		const from = Math.max(0, this.source.uri.path.lastIndexOf(posix.sep, this.source.uri.path.length - suffixLength - 1));
-		return (from > 0 ? '...' : '') + this.source.uri.path.substr(from);
 	}
 
 	async getMostSpecificScopes(range: IRange): Promise<IScope[]> {
@@ -348,7 +352,7 @@ export class StackFrame implements IStackFrame {
 		return sourceToString === UNKNOWN_SOURCE_LABEL ? this.name : `${this.name} (${sourceToString})`;
 	}
 
-	async openInEditor(editorService: IEditorService, preserveFocus?: boolean, sideBySide?: boolean, pinned?: boolean): Promise<ITextEditor | undefined> {
+	async openInEditor(editorService: IEditorService, preserveFocus?: boolean, sideBySide?: boolean, pinned?: boolean): Promise<ITextEditorPane | undefined> {
 		if (this.source.available) {
 			return this.source.openInEditor(editorService, this.range, preserveFocus, sideBySide, pinned);
 		}
@@ -356,13 +360,14 @@ export class StackFrame implements IStackFrame {
 	}
 
 	equals(other: IStackFrame): boolean {
-		return (this.name === other.name) && (other.thread === this.thread) && (other.source === this.source) && (Range.equalsRange(this.range, other.range));
+		return (this.name === other.name) && (other.thread === this.thread) && (this.frameId === other.frameId) && (other.source === this.source) && (Range.equalsRange(this.range, other.range));
 	}
 }
 
 export class Thread implements IThread {
 	private callStack: IStackFrame[];
 	private staleCallStack: IStackFrame[];
+	private callStackCancellationTokens: CancellationTokenSource[] = [];
 	public stoppedDetails: IRawStoppedDetails | undefined;
 	public stopped: boolean;
 
@@ -381,6 +386,8 @@ export class Thread implements IThread {
 			this.staleCallStack = this.callStack;
 		}
 		this.callStack = [];
+		this.callStackCancellationTokens.forEach(c => c.dispose(true));
+		this.callStackCancellationTokens = [];
 	}
 
 	getCallStack(): IStackFrame[] {
@@ -389,6 +396,10 @@ export class Thread implements IThread {
 
 	getStaleCallStack(): ReadonlyArray<IStackFrame> {
 		return this.staleCallStack;
+	}
+
+	getTopStackFrame(): IStackFrame | undefined {
+		return first(this.getCallStack(), sf => !!(sf && sf.source && sf.source.available && sf.source.presentationHint !== 'deemphasize'), undefined);
 	}
 
 	get stateLabel(): string {
@@ -421,8 +432,10 @@ export class Thread implements IThread {
 
 	private async getCallStackImpl(startFrame: number, levels: number): Promise<IStackFrame[]> {
 		try {
-			const response = await this.session.stackTrace(this.threadId, startFrame, levels);
-			if (!response || !response.body) {
+			const tokenSource = new CancellationTokenSource();
+			this.callStackCancellationTokens.push(tokenSource);
+			const response = await this.session.stackTrace(this.threadId, startFrame, levels, tokenSource.token);
+			if (!response || !response.body || tokenSource.token.isCancellationRequested) {
 				return [];
 			}
 
@@ -686,7 +699,7 @@ export class Breakpoint extends BaseBreakpoint implements IBreakpoint {
 
 	toJSON(): any {
 		const result = super.toJSON();
-		result.uri = this.uri;
+		result.uri = this._uri;
 		result.lineNumber = this._lineNumber;
 		result.column = this._column;
 		result.adapterData = this.adapterData;
@@ -695,7 +708,7 @@ export class Breakpoint extends BaseBreakpoint implements IBreakpoint {
 	}
 
 	toString(): string {
-		return resources.basenameOrAuthority(this.uri);
+		return `${resources.basenameOrAuthority(this.uri)} ${this.lineNumber}`;
 	}
 
 	update(data: IBreakpointUpdateData): void {
@@ -819,23 +832,27 @@ export class ThreadAndSessionIds implements ITreeElement {
 export class DebugModel implements IDebugModel {
 
 	private sessions: IDebugSession[];
-	private toDispose: lifecycle.IDisposable[];
 	private schedulers = new Map<string, RunOnceScheduler>();
 	private breakpointsActivated = true;
 	private readonly _onDidChangeBreakpoints = new Emitter<IBreakpointsChangeEvent | undefined>();
 	private readonly _onDidChangeCallStack = new Emitter<void>();
 	private readonly _onDidChangeWatchExpressions = new Emitter<IExpression | undefined>();
+	private breakpoints: Breakpoint[];
+	private functionBreakpoints: FunctionBreakpoint[];
+	private exceptionBreakpoints: ExceptionBreakpoint[];
+	private dataBreakopints: DataBreakpoint[];
+	private watchExpressions: Expression[];
 
 	constructor(
-		private breakpoints: Breakpoint[],
-		private functionBreakpoints: FunctionBreakpoint[],
-		private exceptionBreakpoints: ExceptionBreakpoint[],
-		private dataBreakopints: DataBreakpoint[],
-		private watchExpressions: Expression[],
-		private textFileService: ITextFileService
+		debugStorage: DebugStorage,
+		@ITextFileService private readonly textFileService: ITextFileService
 	) {
+		this.breakpoints = debugStorage.loadBreakpoints();
+		this.functionBreakpoints = debugStorage.loadFunctionBreakpoints();
+		this.exceptionBreakpoints = debugStorage.loadExceptionBreakpoints();
+		this.dataBreakopints = debugStorage.loadDataBreakpoints();
+		this.watchExpressions = debugStorage.loadWatchExpressions();
 		this.sessions = [];
-		this.toDispose = [];
 	}
 
 	getId(): string {
@@ -844,7 +861,7 @@ export class DebugModel implements IDebugModel {
 
 	getSession(sessionId: string | undefined, includeInactive = false): IDebugSession | undefined {
 		if (sessionId) {
-			return this.getSessions(includeInactive).filter(s => s.getId() === sessionId).pop();
+			return this.getSessions(includeInactive).find(s => s.getId() === sessionId);
 		}
 		return undefined;
 	}
@@ -895,7 +912,7 @@ export class DebugModel implements IDebugModel {
 	}
 
 	rawUpdate(data: IRawModelUpdate): void {
-		let session = this.sessions.filter(p => p.getId() === data.sessionId).pop();
+		let session = this.sessions.find(p => p.getId() === data.sessionId);
 		if (session) {
 			session.rawUpdate(data);
 			this._onDidChangeCallStack.fire(undefined);
@@ -903,7 +920,7 @@ export class DebugModel implements IDebugModel {
 	}
 
 	clearThreads(id: string, removeThreads: boolean, reference: number | undefined = undefined): void {
-		const session = this.sessions.filter(p => p.getId() === id).pop();
+		const session = this.sessions.find(p => p.getId() === id);
 		this.schedulers.forEach(scheduler => scheduler.dispose());
 		this.schedulers.clear();
 
@@ -1147,7 +1164,7 @@ export class DebugModel implements IDebugModel {
 	}
 
 	renameFunctionBreakpoint(id: string, name: string): void {
-		const functionBreakpoint = this.functionBreakpoints.filter(fbp => fbp.getId() === id).pop();
+		const functionBreakpoint = this.functionBreakpoints.find(fbp => fbp.getId() === id);
 		if (functionBreakpoint) {
 			functionBreakpoint.name = name;
 			this._onDidChangeBreakpoints.fire({ changed: [functionBreakpoint], sessionOnly: false });
@@ -1210,7 +1227,7 @@ export class DebugModel implements IDebugModel {
 	}
 
 	moveWatchExpression(id: string, position: number): void {
-		const we = this.watchExpressions.filter(we => we.getId() === id).pop();
+		const we = this.watchExpressions.find(we => we.getId() === id);
 		if (we) {
 			this.watchExpressions = this.watchExpressions.filter(we => we.getId() !== id);
 			this.watchExpressions = this.watchExpressions.slice(0, position).concat(we, this.watchExpressions.slice(position));
@@ -1226,11 +1243,5 @@ export class DebugModel implements IDebugModel {
 			}
 		});
 		this._onDidChangeCallStack.fire(undefined);
-	}
-
-	dispose(): void {
-		// Make sure to shutdown each session, such that no debugged process is left laying around
-		this.sessions.forEach(s => s.shutdown());
-		this.toDispose = lifecycle.dispose(this.toDispose);
 	}
 }

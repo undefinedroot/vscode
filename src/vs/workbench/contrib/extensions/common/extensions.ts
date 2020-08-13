@@ -71,7 +71,7 @@ export const SERVICE_ID = 'extensionsWorkbenchService';
 export const IExtensionsWorkbenchService = createDecorator<IExtensionsWorkbenchService>(SERVICE_ID);
 
 export interface IExtensionsWorkbenchService {
-	_serviceBrand: undefined;
+	readonly _serviceBrand: undefined;
 	onChange: Event<IExtension | undefined>;
 	local: IExtension[];
 	installed: IExtension[];
@@ -86,8 +86,12 @@ export interface IExtensionsWorkbenchService {
 	installVersion(extension: IExtension, version: string): Promise<IExtension>;
 	reinstall(extension: IExtension): Promise<IExtension>;
 	setEnablement(extensions: IExtension | IExtension[], enablementState: EnablementState): Promise<void>;
-	open(extension: IExtension, sideByside?: boolean): Promise<any>;
+	open(extension: IExtension, options?: { sideByside?: boolean, preserveFocus?: boolean, pinned?: boolean }): Promise<any>;
 	checkForUpdates(): Promise<void>;
+
+	// Sync APIs
+	isExtensionIgnoredToSync(extension: IExtension): boolean;
+	toggleExtensionIgnoredToSync(extension: IExtension): Promise<void>;
 }
 
 export const ConfigurationKey = 'extensions';
@@ -140,3 +144,5 @@ export class ExtensionContainers extends Disposable {
 		}
 	}
 }
+
+export const TOGGLE_IGNORE_EXTENSION_ACTION_ID = 'workbench.extensions.action.toggleIgnoreExtension';

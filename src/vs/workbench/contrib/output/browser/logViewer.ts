@@ -29,7 +29,7 @@ export class LogViewerInput extends ResourceEditorInput {
 	static readonly ID = 'workbench.editorinputs.output';
 
 	constructor(
-		private readonly outputChannelDescriptor: IFileOutputChannelDescriptor,
+		outputChannelDescriptor: IFileOutputChannelDescriptor,
 		@ITextModelService textModelResolverService: ITextModelService,
 		@ITextFileService textFileService: ITextFileService,
 		@IEditorService editorService: IEditorService,
@@ -39,9 +39,9 @@ export class LogViewerInput extends ResourceEditorInput {
 		@IFilesConfigurationService filesConfigurationService: IFilesConfigurationService
 	) {
 		super(
+			URI.from({ scheme: LOG_SCHEME, path: outputChannelDescriptor.id }),
 			basename(outputChannelDescriptor.file.path),
 			dirname(outputChannelDescriptor.file.path),
-			URI.from({ scheme: LOG_SCHEME, path: outputChannelDescriptor.id }),
 			undefined,
 			textModelResolverService,
 			textFileService,
@@ -55,10 +55,6 @@ export class LogViewerInput extends ResourceEditorInput {
 
 	getTypeId(): string {
 		return LogViewerInput.ID;
-	}
-
-	getResource(): URI {
-		return this.outputChannelDescriptor.file;
 	}
 }
 

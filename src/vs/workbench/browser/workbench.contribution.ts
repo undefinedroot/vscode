@@ -17,10 +17,25 @@ import { workbenchConfigurationNodeBase } from 'vs/workbench/common/configuratio
 	registry.registerConfiguration({
 		...workbenchConfigurationNodeBase,
 		'properties': {
+			'workbench.editor.titleScrollbarSizing': {
+				type: 'string',
+				enum: ['default', 'large'],
+				enumDescriptions: [
+					nls.localize('workbench.editor.titleScrollbarSizing.default', "The default size."),
+					nls.localize('workbench.editor.titleScrollbarSizing.large', "Increases the size, so it can be grabbed more easily with the mouse")
+				],
+				description: nls.localize('tabScrollbarHeight', "Controls the height of the scrollbars used for tabs and breadcrumbs in the editor title area."),
+				default: 'default',
+			},
 			'workbench.editor.showTabs': {
 				'type': 'boolean',
 				'description': nls.localize('showEditorTabs', "Controls whether opened editors should show in tabs or not."),
 				'default': true
+			},
+			'workbench.editor.scrollToSwitchTabs': {
+				'type': 'boolean',
+				'description': nls.localize({ comment: ['This is the description for a setting. Values surrounded by single quotes are not to be translated.'], key: 'scrollToSwitchTabs' }, "Controls whether scrolling over tabs will open them or not. By default tabs will only reveal upon scrolling, but not open. You can press and hold the Shift-key while scrolling to change this behaviour for that duration."),
+				'default': false
 			},
 			'workbench.editor.highlightModifiedTabs': {
 				'type': 'boolean',
@@ -41,6 +56,19 @@ import { workbenchConfigurationNodeBase } from 'vs/workbench/common/configuratio
 					comment: ['This is the description for a setting. Values surrounded by parenthesis are not to be translated.'],
 					key: 'tabDescription'
 				}, "Controls the format of the label for an editor."),
+			},
+			'workbench.editor.untitled.labelFormat': {
+				'type': 'string',
+				'enum': ['content', 'name'],
+				'enumDescriptions': [
+					nls.localize('workbench.editor.untitled.labelFormat.content', "The name of the untitled file is derived from the contents of its first line unless it has an associated file path. It will fallback to the name in case the line is empty or contains no word characters."),
+					nls.localize('workbench.editor.untitled.labelFormat.name', "The name of the untitled file is not derived from the contents of the file."),
+				],
+				'default': 'content',
+				'description': nls.localize({
+					comment: ['This is the description for a setting. Values surrounded by parenthesis are not to be translated.'],
+					key: 'untitledLabelFormat'
+				}, "Controls the format of the label for an untitled editor."),
 			},
 			'workbench.editor.tabCloseButton': {
 				'type': 'string',
@@ -75,17 +103,17 @@ import { workbenchConfigurationNodeBase } from 'vs/workbench/common/configuratio
 			},
 			'workbench.editor.showIcons': {
 				'type': 'boolean',
-				'description': nls.localize('showIcons', "Controls whether opened editors should show with an icon or not. This requires an icon theme to be enabled as well."),
+				'description': nls.localize('showIcons', "Controls whether opened editors should show with an icon or not. This requires a file icon theme to be enabled as well."),
 				'default': true
 			},
 			'workbench.editor.enablePreview': {
 				'type': 'boolean',
-				'description': nls.localize('enablePreview', "Controls whether opened editors show as preview. Preview editors are reused until they are pinned (e.g. via double click or editing) and show up with an italic font style."),
+				'description': nls.localize('enablePreview', "Controls whether opened editors show as preview. Preview editors are reused until they are explicitly set to be kept open (e.g. via double click or editing) and show up with an italic font style."),
 				'default': true
 			},
 			'workbench.editor.enablePreviewFromQuickOpen': {
 				'type': 'boolean',
-				'description': nls.localize('enablePreviewFromQuickOpen', "Controls whether editors opened from Quick Open show as preview. Preview editors are reused until they are pinned (e.g. via double click or editing)."),
+				'description': nls.localize('enablePreviewFromQuickOpen', "Controls whether editors opened from Quick Open show as preview. Preview editors are reused until they are explicitly set to be kept open (e.g. via double click or editing)."),
 				'default': true
 			},
 			'workbench.editor.closeOnFileDelete': {
@@ -191,7 +219,7 @@ import { workbenchConfigurationNodeBase } from 'vs/workbench/common/configuratio
 				'type': 'string',
 				'enum': ['left', 'bottom', 'right'],
 				'default': 'bottom',
-				'description': nls.localize('panelDefaultLocation', "Controls the default location of the panel (terminal, debug console, output, problems). It can either show at the bottom or on the right of the workbench.")
+				'description': nls.localize('panelDefaultLocation', "Controls the default location of the panel (terminal, debug console, output, problems). It can either show at the bottom, right, or left of the workbench.")
 			},
 			'workbench.statusBar.visible': {
 				'type': 'boolean',
@@ -203,15 +231,20 @@ import { workbenchConfigurationNodeBase } from 'vs/workbench/common/configuratio
 				'default': true,
 				'description': nls.localize('activityBarVisibility', "Controls the visibility of the activity bar in the workbench.")
 			},
+			'workbench.activityBar.iconClickBehavior': {
+				'type': 'string',
+				'enum': ['toggle', 'focus'],
+				'default': 'toggle',
+				'description': nls.localize('activityBarIconClickBehavior', "Controls the behavior of clicking an activity bar icon in the workbench."),
+				'enumDescriptions': [
+					nls.localize('workbench.activityBar.iconClickBehavior.toggle', "Hide the side bar if the clicked item is already visible."),
+					nls.localize('workbench.activityBar.iconClickBehavior.focus', "Focus side bar if the clicked item is already visible.")
+				]
+			},
 			'workbench.view.alwaysShowHeaderActions': {
 				'type': 'boolean',
 				'default': false,
 				'description': nls.localize('viewVisibility', "Controls the visibility of view header actions. View header actions may either be always visible, or only visible when that view is focused or hovered over.")
-			},
-			'workbench.view.experimental.allowMovingToNewContainer': {
-				'type': 'boolean',
-				'default': false,
-				'description': nls.localize('movingViewContainer', "Controls whether specific views will have a context menu entry allowing them to be moved to a new container. Currently, this setting only affects the outline view and views contributed by extensions.")
 			},
 			'workbench.fontAliasing': {
 				'type': 'string',
@@ -282,6 +315,11 @@ import { workbenchConfigurationNodeBase } from 'vs/workbench/common/configuratio
 					return base;
 				})(),
 				'markdownDescription': windowTitleDescription
+			},
+			'window.titleSeparator': {
+				'type': 'string',
+				'default': isMacintosh ? ' — ' : ' - ',
+				'markdownDescription': nls.localize("window.titleSeparator", "Separator used by `window.title`.")
 			},
 			'window.menuBarVisibility': {
 				'type': 'string',
@@ -374,7 +412,7 @@ import { workbenchConfigurationNodeBase } from 'vs/workbench/common/configuratio
 			'zenMode.hideActivityBar': {
 				'type': 'boolean',
 				'default': true,
-				'description': nls.localize('zenMode.hideActivityBar', "Controls whether turning on Zen Mode also hides the activity bar at the left of the workbench.")
+				'description': nls.localize('zenMode.hideActivityBar', "Controls whether turning on Zen Mode also hides the activity bar either at the left or right of the workbench.")
 			},
 			'zenMode.hideLineNumbers': {
 				'type': 'boolean',

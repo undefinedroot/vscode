@@ -56,7 +56,7 @@ class OutputChannel extends Disposable implements IOutputChannel {
 
 export class OutputService extends Disposable implements IOutputService, ITextModelContentProvider {
 
-	_serviceBrand: undefined;
+	declare readonly _serviceBrand: undefined;
 
 	private channels: Map<string, OutputChannel> = new Map<string, OutputChannel>();
 	private activeChannelIdInStorage: string;
@@ -112,7 +112,7 @@ export class OutputService extends Disposable implements IOutputService, ITextMo
 		}
 		const outputView = await this.viewsService.openView<OutputViewPane>(OUTPUT_VIEW_ID, !preserveFocus);
 		if (outputView && channel) {
-			outputView!.showChannel(channel, !!preserveFocus);
+			outputView.showChannel(channel, !!preserveFocus);
 		}
 	}
 
