@@ -18,6 +18,8 @@ import { ExtHostDocuments } from 'vs/workbench/api/common/extHostDocuments';
 import { ExtHostCommands } from 'vs/workbench/api/common/extHostCommands';
 import { nullExtensionDescription } from 'vs/workbench/services/extensions/common/extensions';
 import { isEqual } from 'vs/base/common/resources';
+import { IExtensionStoragePaths } from 'vs/workbench/api/common/extHostStoragePaths';
+import { generateUuid } from 'vs/base/common/uuid';
 
 suite('NotebookCell#Document', function () {
 
@@ -43,7 +45,12 @@ suite('NotebookCell#Document', function () {
 		});
 		extHostDocumentsAndEditors = new ExtHostDocumentsAndEditors(rpcProtocol, new NullLogService());
 		extHostDocuments = new ExtHostDocuments(rpcProtocol, extHostDocumentsAndEditors);
-		extHostNotebooks = new ExtHostNotebookController(rpcProtocol, new ExtHostCommands(rpcProtocol, new NullLogService()), extHostDocumentsAndEditors, { isExtensionDevelopmentDebug: false, webviewCspSource: '', webviewResourceRoot: '' }, new NullLogService());
+		const extHostStoragePaths = new class extends mock<IExtensionStoragePaths>() {
+			workspaceValue() {
+				return URI.from({ scheme: 'test', path: generateUuid() });
+			}
+		};
+		extHostNotebooks = new ExtHostNotebookController(rpcProtocol, new ExtHostCommands(rpcProtocol, new NullLogService()), extHostDocumentsAndEditors, { isExtensionDevelopmentDebug: false, webviewCspSource: '', webviewResourceRoot: '' }, new NullLogService(), extHostStoragePaths);
 		let reg = extHostNotebooks.registerNotebookContentProvider(nullExtensionDescription, 'test', new class extends mock<vscode.NotebookContentProvider>() {
 			// async openNotebook() { }
 		});
@@ -97,11 +104,13 @@ suite('NotebookCell#Document', function () {
 		assert.ok(d1);
 		assert.equal(d1.languageId, c1.language);
 		assert.equal(d1.version, 1);
+		assert.ok(d1.notebook === notebook);
 
 		const d2 = extHostDocuments.getDocument(c2.uri);
 		assert.ok(d2);
 		assert.equal(d2.languageId, c2.language);
 		assert.equal(d2.version, 1);
+		assert.ok(d2.notebook === notebook);
 	});
 
 	test('cell document goes when notebook closes', async function () {
@@ -213,6 +222,12 @@ suite('NotebookCell#Document', function () {
 		}
 		for (let doc of docs) {
 			assert.equal(doc.isClosed, true);
+		}
+	});
+
+	test('cell document knows notebook', function () {
+		for (let cells of notebook.cells) {
+			assert.equal(cells.document.notebook === notebook, true);
 		}
 	});
 });

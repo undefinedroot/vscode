@@ -12,7 +12,7 @@ import { BareFontInfo } from 'vs/editor/common/config/fontInfo';
 import { Range } from 'vs/editor/common/core/range';
 import { IUndoRedoService } from 'vs/platform/undoRedo/common/undoRedo';
 import { EditorModel } from 'vs/workbench/common/editor';
-import { ICellRange, ICellViewModel, INotebookEditor, INotebookEditorContribution, INotebookEditorMouseEvent, NotebookLayoutInfo } from 'vs/workbench/contrib/notebook/browser/notebookBrowser';
+import { ICellRange, ICellViewModel, INotebookEditor, INotebookEditorContribution, INotebookEditorMouseEvent, NotebookLayoutInfo, NotebookEditorOptions } from 'vs/workbench/contrib/notebook/browser/notebookBrowser';
 import { OutputRenderer } from 'vs/workbench/contrib/notebook/browser/view/output/outputRenderer';
 import { NotebookEventDispatcher } from 'vs/workbench/contrib/notebook/browser/viewModel/eventDispatcher';
 import { CellViewModel, IModelDecorationsChangeAccessor, NotebookViewModel } from 'vs/workbench/contrib/notebook/browser/viewModel/notebookViewModel';
@@ -33,6 +33,7 @@ import { IConfigurationService } from 'vs/platform/configuration/common/configur
 import { TestConfigurationService } from 'vs/platform/configuration/test/common/testConfigurationService';
 import { IThemeService } from 'vs/platform/theme/common/themeService';
 import { TestThemeService } from 'vs/platform/theme/test/common/testThemeService';
+import { ScrollEvent } from 'vs/base/common/scrollable';
 
 export class TestCell extends NotebookCellTextModel {
 	constructor(
@@ -62,6 +63,10 @@ export class TestNotebookEditor implements INotebookEditor {
 	constructor(
 	) { }
 
+	setOptions(options: NotebookEditorOptions | undefined): Promise<void> {
+		throw new Error('Method not implemented.');
+	}
+
 	hideInset(output: IProcessedOutput): void {
 		throw new Error('Method not implemented.');
 	}
@@ -69,6 +74,7 @@ export class TestNotebookEditor implements INotebookEditor {
 	multipleKernelsAvailable: boolean = false;
 	onDidChangeAvailableKernels: Event<void> = new Emitter<void>().event;
 	onDidChangeActiveCell: Event<void> = new Emitter<void>().event;
+	onDidScroll = new Emitter<ScrollEvent>().event;
 
 	uri?: URI | undefined;
 	textModel?: NotebookTextModel | undefined;
